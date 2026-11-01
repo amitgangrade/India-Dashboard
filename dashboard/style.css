@@ -250,3 +250,18 @@ tr:hover td { background: var(--accent-wash); }
 .spinner { width: 34px; height: 34px; border-radius: 50%; border: 3px solid var(--grid); border-top-color: var(--s1); animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* ---------------- live mode */
+.mode-pill { position: relative; overflow: hidden; display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px 6px;
+  border-radius: 999px; border: 1px solid var(--border); background: var(--surface-1); font-size: 12px; color: var(--text-secondary);
+  white-space: nowrap; max-width: 46vw; }
+.mode-pill:empty { display: none; }
+.mode-pill .ic { font-weight: 700; color: var(--text-muted); }
+.mode-pill.exact .ic { color: var(--good); }
+.mode-pill.exact { color: var(--text-primary); }
+.mode-pill.error .ic { color: var(--bad); }
+.mode-pill .bar { position: absolute; left: 0; bottom: 0; height: 2px; width: 0; background: var(--s1); transition: width .3s; }
+.mode-pill.exact .bar, .mode-pill.sample .bar, .mode-pill.error .bar { display: none; }
+.approx .kpi .value::before { content: "≈ "; color: var(--text-muted); font-weight: 400; }
+#cmp-status { text-align: right; max-width: 50%; }
+@media (max-width: 820px) { .mode-pill { max-width: 90vw; } .top { flex-wrap: wrap; } }

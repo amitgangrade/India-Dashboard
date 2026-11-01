@@ -14,6 +14,7 @@
       <div class="subtitle" id="subtitle">Loading simulated population…</div>
     </div>
     <div class="top-controls">
+      <div id="mode-pill" class="mode-pill" role="status" aria-live="polite"></div>
       <div class="seg" role="group" aria-label="Number format">
         <button data-fmt="intl" class="on">1.5B</button><button data-fmt="indian">150 crore</button>
       </div>
@@ -72,7 +73,7 @@
   <!-- ============================== COMPARE -->
   <main class="tab-panel" id="tab-compare">
     <div class="card">
-      <div class="card-head"><div><h2>Compare two groups</h2><p class="hint">Pick a preset or build each group</p></div></div>
+      <div class="card-head"><div><h2>Compare two groups</h2><p class="hint">Pick a preset or build each group</p></div><div id="cmp-status" class="hint"></div></div>
       <div class="presets" id="presets"></div>
       <div class="group-builders">
         <div class="gb" id="gb-a"></div>

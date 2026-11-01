@@ -310,14 +310,17 @@ function aggregate(filters, cross = true) {
     ...groups, ...DIMS.map((d) => GCOL[d.key]), ...cacc, ...CKEY, ...act.map((a) => a.col), ...act.map((a) => a.allowed));
   expandCombos(cacc, groups);
   expandProfiles(pacc, stm);
-  // selection KPIs = sum of per-state metrics over states that pass the state filter
+  return { groups: groups.map((g, k) => g.subarray(0, DIMS[k].n)), kpi: kpiFrom(stm, filters), stm, stAge, ageSex, ageSexSel, exact: false };
+}
+// selection KPIs = sum of per-state metrics over states that pass the state filter
+function kpiFrom(stm, filters) {
   const kpi = new Float64Array(NK);
   const ss = filters.get("state");
   for (let s = 0; s < S; s++) {
     if (ss && ss.size && !ss.has(s)) continue;
     for (let k = 0; k < NK; k++) kpi[k] += stm[s * NK + k];
   }
-  return { groups: groups.map((g, k) => g.subarray(0, DIMS[k].n)), kpi, stm, stAge, ageSex, ageSexSel };
+  return kpi;
 }
 
 function stateSexAge(filters) {
@@ -416,17 +419,140 @@ function scheduleUpdate() {
   pending = true;
   requestAnimationFrame(() => { pending = false; update(); });
 }
-function update() {
-  const t0 = performance.now();
-  AGG = aggregate(state.filters, true);
-  renderChips();
+function renderCurrent() {
+  $("#app").classList.toggle("approx", LIVE.ready && !(AGG && AGG.exact));
   if (state.tab === "explore") renderExplore();
   if (state.tab === "projection") renderProjection(true);
   if (state.tab === "hundred") renderHundred();
   if (state.tab === "data") renderData();
+}
+function update() {
+  const t0 = performance.now();
+  AGG = aggregate(state.filters, true);   // instant estimate from the in-browser sample
+  renderChips();
+  renderCurrent();
   const dt = performance.now() - t0;
   $("#subtitle").textContent = `${fmtFull(META.total)} simulated people · ${STATES.length} states & UTs · ` +
-    `${fmtFull(N)}-person weighted extract · last update ${dt.toFixed(0)} ms`;
+    (LIVE.ready ? `instant estimate in ${dt.toFixed(0)} ms, then exact answers from all records`
+      : `${fmtFull(N)}-person weighted extract · last update ${dt.toFixed(0)} ms`);
+  refineExact();                           // exact answer from the full population, if a server is available
+}
+
+// ============================================================ live mode (exact queries over all 1.5B records)
+/* The page always answers from its 1.3M-person sample first. When a query server (server/app.py) is reachable,
+ * every view is then re-requested from the server, which scans all records, and redrawn with exact numbers.
+ * Server location: same origin, or ?api=https://host/ in the page URL, or window.BHARAT_API. */
+const LIVE = { base: null, on: false, ready: false, health: null, client: Math.random().toString(36).slice(2, 10), seq: 0, ctl: null, poll: null };
+function apiUrl(p) { return LIVE.base + p; }
+async function postJSON(path, body, signal) {
+  const r = await fetch(apiUrl(path), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+  if (r.status === 409) { const e = new Error("superseded"); e.name = "AbortError"; throw e; }
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r;
+}
+async function detectLive() {
+  let q = null;
+  try { q = new URLSearchParams(location.search).get("api"); } catch (e) { /* ignore */ }
+  const cands = [];
+  if (q) cands.push(q.endsWith("/") ? q : q + "/");
+  if (window.BHARAT_API) cands.push(window.BHARAT_API.endsWith("/") ? window.BHARAT_API : window.BHARAT_API + "/");
+  if (location.protocol.startsWith("http") && !location.hostname.endsWith("github.io")) cands.push("");
+  for (const base of cands) {
+    try {
+      const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 2500);
+      const r = await fetch(base + "api/health", { signal: ctl.signal }); clearTimeout(t);
+      if (!r.ok) continue;
+      const h = await r.json();
+      if (!h.ok) continue;
+      LIVE.base = base; LIVE.on = true; LIVE.health = h;
+      return true;
+    } catch (e) { /* not available */ }
+  }
+  setPill("sample");
+  return false;
+}
+async function waitWarm() {
+  while (true) {
+    const h = await (await fetch(apiUrl("api/health"))).json();
+    LIVE.health = h;
+    if (h.warm) break;
+    setPill("warming", h.warm_progress);
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  LIVE.ready = true;
+  // exact national baseline first (instant on a warm server), then the current view
+  const r = await (await postJSON("api/aggregate", { filters: {}, cross: true, client: LIVE.client + "-base" })).json();
+  BASE = fromServer(r, new Map());
+  proj.baseCache = null;
+  update();
+  if (state.tab === "me") renderMe();            // tabs with their own queries refresh once the server is ready
+  if (state.tab === "compare") renderCompare();
+}
+function filtersObj(filters) { return Object.fromEntries([...filters].map(([k, set]) => [k, [...set]])); }
+function fromServer(r, filters) {
+  const h = LIVE.health, mi = h.metrics, di = h.dims;
+  const perm = Object.keys(K).map((name) => mi.indexOf(name));
+  const stm = new Float64Array(S * NK), stAge = new Float64Array(S * 101), ssaFlat = new Float64Array(S * 303);
+  for (let s = 0; s < S; s++) {
+    for (let k = 0; k < NK; k++) stm[s * NK + k] = r.stm[s][perm[k]];
+    for (let a = 0; a < 101; a++) stAge[s * 101 + a] = r.stAge[s][a];
+    for (let a = 0; a < 101; a++) {      // projection layout: third gender folded into male, as in stateSexAge()
+      ssaFlat[s * 303 + a] = r.ssa[s][a] + r.ssa[s][202 + a];
+      ssaFlat[s * 303 + 101 + a] = r.ssa[s][101 + a];
+    }
+  }
+  const groups = DIMS.map((d) => Float64Array.from(r.groups[di.indexOf(d.key)]));
+  return { groups, kpi: kpiFrom(stm, filters), stm, stAge, ageSex: Float64Array.from(r.ageSex),
+    ageSexSel: Float64Array.from(r.ageSexSel), ssaFlat, exact: true,
+    info: { seconds: r.seconds, cached: r.cached, scanned: r.scanned } };
+}
+function refineExact() {
+  if (!LIVE.ready) return;
+  const seq = ++LIVE.seq;
+  const filters = new Map([...state.filters].map(([k, v]) => [k, new Set(v)]));
+  if (LIVE.ctl) LIVE.ctl.abort();
+  LIVE.ctl = new AbortController();
+  setPill("refining", 0);
+  startPoll(seq);
+  postJSON("api/aggregate", { filters: filtersObj(filters), cross: true, client: LIVE.client, seq }, LIVE.ctl.signal)
+    .then((r) => r.json())
+    .then((r) => {
+      if (seq !== LIVE.seq) return;
+      stopPoll();
+      AGG = fromServer(r, filters);
+      setPill("exact", AGG.info);
+      renderCurrent();
+    })
+    .catch((e) => { if (e.name !== "AbortError" && seq === LIVE.seq) { stopPoll(); setPill("error"); } });
+}
+function startPoll(seq) {
+  stopPoll();
+  LIVE.poll = setInterval(async () => {
+    try {
+      const r = await (await fetch(apiUrl("api/status?client=" + LIVE.client))).json();
+      if (seq === LIVE.seq && r.state !== "idle") setPill(r.state === "queued" ? "queued" : "refining", r.progress, r.elapsed);
+    } catch (e) { /* ignore */ }
+  }, 350);
+}
+function stopPoll() { if (LIVE.poll) clearInterval(LIVE.poll); LIVE.poll = null; }
+function setPill(mode, a, b) {
+  const el = $("#mode-pill");
+  if (!el) return;
+  el.className = "mode-pill " + mode;
+  el.replaceChildren();
+  const icon = document.createElement("span"); icon.className = "ic";
+  const txt = document.createElement("span");
+  const bar = document.createElement("i"); bar.className = "bar";
+  if (mode === "sample") { icon.textContent = "≈"; txt.textContent = "Estimates · 1.3M-person sample"; el.title = "Run server/app.py next to the full data for exact answers over all 1.5B records"; }
+  if (mode === "warming") { icon.textContent = "⟳"; txt.textContent = `Live server loading 1.5B records · ${Math.round(a * 100)}%`; bar.style.width = (a * 100) + "%"; }
+  if (mode === "queued") { icon.textContent = "≈"; txt.textContent = "Estimate shown · exact query queued"; }
+  if (mode === "refining") { icon.textContent = "≈"; txt.textContent = `Estimate shown · exact scan ${Math.round((a || 0) * 100)}%${b ? ` · ${b.toFixed(1)}s` : ""}`; bar.style.width = ((a || 0) * 100) + "%"; }
+  if (mode === "exact") {
+    icon.textContent = "✓";
+    txt.textContent = `Exact · all ${fmtPop(META.total)} records · ` + (a.cached ? "cached" : a.scanned === 0 ? "instant (precomputed)" : `${a.seconds.toFixed(1)} s`);
+  }
+  if (mode === "error") { icon.textContent = "!"; txt.textContent = "Live server unreachable · showing estimates"; }
+  el.append(icon, txt, bar);
 }
 
 // ============================================================ tooltip
@@ -1098,8 +1224,23 @@ function buildGroupForms() {
   }
 }
 const CMP_INDS = ["pop", "median", "child", "elderly", "sexratio", "urban", "lit", "flit", "grad", "lfpr", "flfpr", "ue", "agri", "regular", "earn", "smart", "net", "bank", "ins", "hh", "married2024", "sc", "st"];
+let cmpSeq = 0;
 function renderCompare() {
-  const A = aggregate(cmpFilters(cmp.A), false), B = aggregate(cmpFilters(cmp.B), false);
+  const fa = cmpFilters(cmp.A), fb = cmpFilters(cmp.B);
+  drawCompare(aggregate(fa, false), aggregate(fb, false));
+  if (!LIVE.ready) return;
+  const seq = ++cmpSeq;
+  $("#cmp-status").textContent = "≈ Estimates from the sample · exact comparison over all 1.5B records in progress…";
+  Promise.all([fa, fb].map((f, i) => postJSON("api/aggregate", { filters: filtersObj(f), cross: false, client: LIVE.client + "-cmp" + i })
+    .then((r) => r.json()).then((r) => fromServer(r, f))))
+    .then(([A, B]) => {
+      if (seq !== cmpSeq) return;
+      drawCompare(A, B);
+      $("#cmp-status").textContent = `✓ Exact over all ${fmtPop(META.total)} records`;
+    })
+    .catch((e) => { if (e.name !== "AbortError" && seq === cmpSeq) $("#cmp-status").textContent = "Live server unreachable · showing estimates"; });
+}
+function drawCompare(A, B) {
   const cA = css("--s1"), cB = css("--s2");
   $("#gb-pop-A").textContent = `${fmtPop(A.kpi[K.POP])} people`;
   $("#gb-pop-B").textContent = `${fmtPop(B.kpi[K.POP])} people`;
@@ -1257,9 +1398,10 @@ function project(ssa, scn) {
 }
 function renderProjection(recompute) {
   if (recompute || !proj.res) {
-    const ssa = stateSexAge(state.filters);
+    const ssa = AGG && AGG.exact ? AGG.ssaFlat : stateSexAge(state.filters);
     proj.res = project(ssa, proj.scn);
-    proj.base = state.filters.size ? (proj.baseCache?.[proj.scn] ?? (proj.baseCache = { ...(proj.baseCache || {}), [proj.scn]: project(stateSexAge(new Map()), proj.scn) })[proj.scn]) : null;
+    const baseSSA = () => (BASE.exact ? BASE.ssaFlat : stateSexAge(new Map()));
+    proj.base = state.filters.size ? (proj.baseCache?.[proj.scn] ?? (proj.baseCache = { ...(proj.baseCache || {}), [proj.scn]: project(baseSSA(), proj.scn) })[proj.scn]) : null;
   }
   const res = proj.res;
   const i = proj.year - META.reference_year;
@@ -1471,39 +1613,57 @@ function initMe() {
   field("Highest education", sel(LBL.education.map((l, i) => [i, l]), me.education, (v) => (me.education = v)));
   field("Monthly earnings from work (₹, 0 if none)", num(me.earn, 0, 10000000, (v) => (me.earn = v)));
 }
-function renderMe() {
-  const out = $("#me-results");
+const ME_BINS = (e) => Math.max(0, Math.min(39, Math.floor((Math.log10(Math.max(e, 500)) - 2.7) / (3.6 / 40))));
+function meSample() {
   const sx = COL.sex, st = COL.state, ur = COL.urban, ed = COL.education, act = COL.activity;
-  let like = 0, likeN = 0, younger = 0, same = 0, tot = 0, stYoung = 0, stSame = 0, stTot = 0;
-  let eduLow = 0, eduSame = 0, eduTot = 0, wLow = 0, wSame = 0, wTot = 0, wsLow = 0, wsTot = 0, weLow = 0, weTot = 0;
-  const actLike = new Float64Array(12), smLike = [0, 0], hhLike = [0, 0], wealthLike = new Float64Array(5);
-  const hist = new Float64Array(40), bins = (e) => Math.max(0, Math.min(39, Math.floor((Math.log10(Math.max(e, 500)) - 2.7) / (3.6 / 40))));
+  const o = { like: 0, likeN: 0, tot: 0, younger: 0, same: 0, stTot: 0, stYoung: 0, stSame: 0, eduTot: 0, eduLow: 0, eduSame: 0,
+    wTot: 0, wLow: 0, wSame: 0, wsTot: 0, wsLow: 0, weTot: 0, weLow: 0, smDen: 0, smYes: 0, hhSum: 0, hhN: 0,
+    actLike: new Float64Array(12), wealthLike: new Float64Array(5), hist: new Float64Array(40) };
   const meBand = Math.min((me.age / 5) | 0, NB - 1);
   for (let i = 0; i < N; i++) {
     const w = W[i], a = AGE[i];
-    tot += w;
-    if (a < me.age) younger += w; else if (a === me.age) same += w;
-    if (st[i] === me.state) { stTot += w; if (a < me.age) stYoung += w; else if (a === me.age) stSame += w; }
-    if (COL.band[i] === meBand && a >= 7) { eduTot += w; if (ed[i] < me.education) eduLow += w; else if (ed[i] === me.education) eduSame += w; }
+    o.tot += w;
+    if (a < me.age) o.younger += w; else if (a === me.age) o.same += w;
+    if (st[i] === me.state) { o.stTot += w; if (a < me.age) o.stYoung += w; else if (a === me.age) o.stSame += w; }
+    if (COL.band[i] === meBand && a >= 7) { o.eduTot += w; if (ed[i] < me.education) o.eduLow += w; else if (ed[i] === me.education) o.eduSame += w; }
     if (act[i] >= FW) {
       const e = EARN[i];
-      wTot += w; if (e < me.earn) wLow += w; else if (e === me.earn) wSame += w;
-      if (st[i] === me.state) { wsTot += w; if (e < me.earn) wsLow += w; }
-      if (ed[i] === me.education) { weTot += w; if (e < me.earn) weLow += w; }
-      hist[bins(e)] += w;
+      o.wTot += w; if (e < me.earn) o.wLow += w; else if (e === me.earn) o.wSame += w;
+      if (st[i] === me.state) { o.wsTot += w; if (e < me.earn) o.wsLow += w; }
+      if (ed[i] === me.education) { o.weTot += w; if (e < me.earn) o.weLow += w; }
+      o.hist[ME_BINS(e)] += w;
     }
     if (sx[i] === me.sex && ed[i] === me.education && Math.abs(a - me.age) <= 2) {
-      if (st[i] === me.state && ur[i] === me.urban) { like += w; likeN++; }
-      actLike[act[i]] += w; wealthLike[COL.wealth[i]] += w;
-      if (a >= 15) { smLike[COL.smartphone[i]] += w; }
-      hhLike[0] += w * COL.hh_size[i]; hhLike[1] += w;
+      if (st[i] === me.state && ur[i] === me.urban) { o.like += w; o.likeN++; }
+      o.actLike[act[i]] += w; o.wealthLike[COL.wealth[i]] += w;
+      if (a >= 15) { o.smDen += w; o.smYes += w * COL.smartphone[i]; }
+      o.hhSum += w * COL.hh_size[i]; o.hhN += w;
     }
   }
+  return o;
+}
+let meSeq = 0, meTimer = null;
+function renderMe() {
+  drawMe(meSample(), null);
+  if (!LIVE.ready) return;
+  const seq = ++meSeq;
+  clearTimeout(meTimer);
+  meTimer = setTimeout(() => {   // debounce typing; each exact query scans every record
+    postJSON("api/me", { ...me, client: LIVE.client + "-me" }).then((r) => r.json())
+      .then((r) => { if (seq === meSeq) drawMe(r, r); })
+      .catch(() => { /* keep the estimate */ });
+  }, 400);
+}
+function drawMe(o, exact) {
+  const out = $("#me-results");
+  const meBand = Math.min((me.age / 5) | 0, NB - 1);
   const p = (lo, eq, t) => (t > 0 ? (lo + eq / 2) / t : NaN);
   out.replaceChildren();
   const big = document.createElement("div"); big.className = "me-big";
-  const b = document.createElement("b"); b.textContent = "≈ " + fmtPop(like);
-  big.append(b, document.createTextNode(`people in India share your age (±2 years), sex, state, area and education.${likeN < 20 ? " (Rare profile: estimate based on few records.)" : ""}`));
+  const b = document.createElement("b"); b.textContent = (exact ? "" : "≈ ") + (exact ? fmtFull(o.like) : fmtPop(o.like));
+  const note = exact ? ` (exact count over all ${fmtPop(META.total)} records${exact.cached ? ", cached" : `, ${exact.seconds.toFixed(1)} s`})`
+    : LIVE.ready ? " (estimate from the sample; exact count in progress…)" : o.likeN < 20 ? " (Rare profile: estimate based on few records.)" : "";
+  big.append(b, document.createTextNode(`people in India share your age (±2 years), sex, state, area and education.${note}`));
   out.append(big);
   const grid = document.createElement("div"); grid.className = "me-grid"; out.append(grid);
   const stat = (l, v, d, meter) => {
@@ -1513,21 +1673,23 @@ function renderMe() {
     if (isFinite(meter)) { const m = document.createElement("div"); m.className = "meter"; const i = document.createElement("i"); i.style.width = (meter * 100).toFixed(1) + "%"; m.append(i); s.append(m); }
     grid.append(s);
   };
-  const oa = p(younger, same, tot), os = p(stYoung, stSame, stTot);
+  const oa = p(o.younger, o.same, o.tot), os = p(o.stYoung, o.stSame, o.stTot);
   stat("You are older than", pct(oa, 0) + " of Indians", `${pct(os, 0)} of people in ${STATES[me.state].name}`, oa);
-  const ep = p(eduLow, eduSame, eduTot);
+  const ep = p(o.eduLow, o.eduSame, o.eduTot);
   stat("Education rank in your age group", "Top " + pct(1 - ep, 0), `Among Indians aged ${BAND_LABELS[meBand]}`, ep);
   if (me.earn > 0) {
-    const wp = p(wLow, wSame, wTot);
-    stat("Your earnings beat", pct(wp, 0) + " of workers", `${pct(wsLow / wsTot, 0)} in your state · ${pct(weLow / weTot, 0)} with your education`, wp);
+    const wp = p(o.wLow, o.wSame, o.wTot);
+    stat("Your earnings beat", pct(wp, 0) + " of workers", `${pct(o.wsLow / o.wsTot, 0)} in your state · ${pct(o.weLow / o.weTot, 0)} with your education`, wp);
   }
+  const actLike = o.actLike;
   const workShare = d3.sum(actLike.slice(FW)) / (d3.sum(actLike) || 1);
   let topSec = FW; for (let k = FW; k < 12; k++) if (actLike[k] > actLike[topSec]) topSec = k;
   stat("People like you (any state) who work", pct(workShare, 0), workShare > 0 ? `Most common sector: ${LBL.activity[topSec]}` : "", workShare);
-  if (me.age >= 15) stat("…who own a smartphone", pct(smLike[1] / ((smLike[0] + smLike[1]) || 1), 0), "Same age, sex and education", smLike[1] / ((smLike[0] + smLike[1]) || 1));
-  let topW = 0; for (let k = 1; k < 5; k++) if (wealthLike[k] > wealthLike[topW]) topW = k;
-  stat("…typical household", `${(hhLike[0] / (hhLike[1] || 1)).toFixed(1)} people`, `Most often in the ${LBL.wealth[topW].toLowerCase()} wealth quintile`);
+  if (me.age >= 15) stat("…who own a smartphone", pct(o.smYes / (o.smDen || 1), 0), "Same age, sex and education", o.smYes / (o.smDen || 1));
+  let topW = 0; for (let k = 1; k < 5; k++) if (o.wealthLike[k] > o.wealthLike[topW]) topW = k;
+  stat("…typical household", `${(o.hhSum / (o.hhN || 1)).toFixed(1)} people`, `Most often in the ${LBL.wealth[topW].toLowerCase()} wealth quintile`);
   // earnings histogram with marker
+  const hist = Array.from(o.hist);
   const h = document.createElement("div"); h.className = "chart"; out.append(h);
   const ttl = document.createElement("div"); ttl.className = "hint"; ttl.textContent = "Monthly earnings of all workers in India (log scale)" + (me.earn > 0 ? " · line marks you" : ""); out.insertBefore(ttl, h);
   const width = Math.max(300, h.clientWidth || out.clientWidth), height = 150, mb = 22;
@@ -1535,9 +1697,9 @@ function renderMe() {
   const x = d3.scaleLog().domain([500, 10 ** 6.3]).range([10, width - 10]);
   const y = d3.scaleLinear().domain([0, d3.max(hist)]).range([height - mb, 8]);
   const bw = (width - 20) / 40;
-  svg.selectAll("path.bar").data(Array.from(hist)).enter().append("path").attr("class", "bar")
-    .attr("d", (v, i) => roundedTopPath(10 + i * bw + 1, height - mb, bw - 2, height - mb - y(v), 2)).attr("fill", (v, i) => (me.earn > 0 && i === bins(me.earn) ? css("--s2") : css("--s1")))
-    .on("pointermove", (ev, v) => { const i = Array.from(hist).indexOf(v); const lo = 10 ** (2.7 + i * 3.6 / 40), hi = 10 ** (2.7 + (i + 1) * 3.6 / 40); showTip(ev, `${fmtRs(lo)} – ${fmtRs(hi)}`, [{ k: "Workers", v: fmtPop(v) }]); })
+  svg.selectAll("path.bar").data(hist).enter().append("path").attr("class", "bar")
+    .attr("d", (v, i) => roundedTopPath(10 + i * bw + 1, height - mb, bw - 2, height - mb - y(v), 2)).attr("fill", (v, i) => (me.earn > 0 && i === ME_BINS(me.earn) ? css("--s2") : css("--s1")))
+    .on("pointermove", (ev, v) => { const i = hist.indexOf(v); const lo = 10 ** (2.7 + i * 3.6 / 40), hi = 10 ** (2.7 + (i + 1) * 3.6 / 40); showTip(ev, `${fmtRs(lo)} – ${fmtRs(hi)}`, [{ k: "Workers", v: fmtPop(v) }]); })
     .on("pointerleave", hideTip);
   svg.append("g").attr("class", "axis").attr("transform", `translate(0,${height - mb})`).call(d3.axisBottom(x).tickValues([1e3, 5e3, 1e4, 2e4, 5e4, 1e5, 5e5, 1e6]).tickFormat((v) => "₹" + (v >= 1e5 ? v / 1e5 + "L" : v / 1e3 + "K")).tickSize(0).tickPadding(6)).select(".domain").attr("stroke", css("--axis"));
   if (me.earn > 0) svg.append("line").attr("x1", x(Math.max(500, me.earn))).attr("x2", x(Math.max(500, me.earn))).attr("y1", 4).attr("y2", height - mb).attr("stroke", css("--text-primary")).attr("stroke-width", 1.5);
@@ -1641,7 +1803,14 @@ function initData() {
     for (const r of tableRows()) lines.push([r.name, ...TABLE_COLS.map((k) => (isFinite(r.vals[k]) ? +r.vals[k].toFixed(6) : ""))].map(csvCell).join(","));
     download("india_selection_by_state.csv", `# Selection: ${describeFilters(state.filters)} (simulated data)\n` + lines.join("\n"));
   };
-  $("#dl-rows").onclick = () => {
+  $("#dl-rows").onclick = async () => {
+    if (LIVE.ready) {
+      try {
+        const r = await postJSON("api/rows", { filters: filtersObj(state.filters), limit: 200000 });
+        download("india_rows_exact.csv", await r.text());
+        return;
+      } catch (e) { /* fall back to the sample */ }
+    }
     const act = activeList(state.filters);
     const keys = ["state", "urban", "sex", "religion", "caste", "language", "education", "marital", "activity", "emp_type", "wealth", "hh_size", "smartphone", "internet", "bank", "insurance", "disability"];
     const lines = [["weight", "age", ...keys, "monthly_earnings_rs"].join(",")];
@@ -1715,7 +1884,7 @@ function init() {
   addEventListener("hashchange", () => { const h = location.hash.slice(1); if (BASE && h !== state.tab && TABS.includes(h)) setTab(h); });
   let rt;
   addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(rerenderAll, 150); });
-  window.__bharat = { state, setFilter, setTab, aggregate: () => aggregate(state.filters), get N() { return N; }, get NP() { return PROF_MA.length; } };
+  window.__bharat = { state, setFilter, setTab, LIVE, get AGG() { return AGG; }, aggregate: () => aggregate(state.filters), get N() { return N; }, get NP() { return PROF_MA.length; } };
 }
 
 (async function main() {
@@ -1735,5 +1904,6 @@ function init() {
   const t = location.hash.slice(1);
   setTab(TABS.includes(t) ? t : "explore");
   update();
+  if (await detectLive()) waitWarm().catch(() => setPill("error"));
 })();
 })();

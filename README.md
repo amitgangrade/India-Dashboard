@@ -154,12 +154,70 @@ pre-compressed into metric profiles.
 It also has a light/dark theme, international (1.5B) or Indian (150 crore) number formats, keyboard-focusable
 marks, and a colour palette validated for colour-vision deficiency.
 
+## Live mode: exact answers over all 1.5 billion records
+
+The published site answers from the 1.3M-person sample. Run the **query server** next to the full data and
+every view becomes exact: the page still draws the sample estimate instantly (marked "≈"), then replaces it with
+the exact result from a scan of all 1.5B records. A status indicator in the header shows the scan's progress.
+
+```bash
+pip install -r requirements.txt
+```
+
+```bash
+python generator/generate.py
+```
+
+```bash
+python server/app.py
+```
+
+Then open http://localhost:8000. The server serves the dashboard and the API. Startup compiles the kernels
+(~20 s the first time, cached afterwards), then memory-maps the 12 GB and pre-sums every state × rural/urban
+block (~25-50 s).
+
+To use the **published GitHub Pages site** with your own server, add `?api=` to its URL
+(https://amitgangrade.github.io/India-Dashboard/?api=http://localhost:8000). To serve other people, run with
+`--host 0.0.0.0 --cors https://amitgangrade.github.io` behind an HTTPS reverse proxy (e.g. Caddy) and use
+`?api=https://your-host/`.
+
+### How it works
+
+| | |
+|---|---|
+| **Storage** | The 8-byte records stay in the OS page cache through read-only memory maps (12 GB of RAM). Nothing is pre-aggregated beyond per-block totals. |
+| **One pass per click** | `server/engine.py` is a parallel Numba kernel that computes everything a click needs in one scan: all 19 crossfilter breakdowns (each ignoring its own filter), 44 per-state metrics, age histograms, pyramids and per-state age × sex counts for the projection. The page receives ~25 KB of gzipped totals, never rows. |
+| **Instant state/area clicks** | The files are laid out by state × rural/urban, so those filters are constant inside a block. Blocks that cannot contribute are skipped, and selections on state/area alone are answered exactly from the per-block totals without scanning. |
+| **Cheap filter test** | Each row decodes only the filtered fields first, and fully decodes only if it can still count. |
+| **Cancel and cache** | A newer click from the same browser cancels its older scan at the next block. Results are cached (LRU, 2,000 entries), so going back to an earlier view is instant. |
+| **Safe API** | Fixed query shape only (filters as dimension → codes), no SQL. Endpoints: `/api/health`, `/api/status`, `/api/aggregate`, `/api/me`, `/api/rows`. |
+
+Every tab uses it: Explore, India in 100 and Data use the exact crossfilter result; Compare runs two exact
+queries; Projection starts from exact per-state age × sex counts; People like me gets exact ranks and the exact
+number of people who share your profile; row export returns up to 200,000 real records from the full population.
+
+`python server/test_engine.py` checks the engine against the exact counts recorded during generation.
+
+### Measured speed (4-core cloud container, all 1.5B records)
+
+| Query | Time |
+|---|---|
+| Any state / rural-urban selection, or a repeat of an earlier query | instant (exact, from stored totals or cache) |
+| Typical filtered click, e.g. Kerala + Christian | ~6 s |
+| Broad filter, e.g. women graduates in cities, or poorest quintile | ~11-16 s |
+| Sample estimate shown meanwhile | ~0.1 s |
+
+The scan is CPU-bound at ~140M rows/s on 4 cores and scales with cores. A 32-64 core server should bring full
+scans to roughly 0.5-1.5 s; that is an extrapolation, not a measurement. Memory bandwidth (reading 12 GB once,
+~0.1 s) is the floor.
+
 ## Layout
 
 ```
 generator/   params.py (source figures)  model.py (tables + Numba kernel)  calibrate.py
              generate.py  popdata.py (reader)  query.py (CLI)  validate.py (-> VALIDATION.md)
 dashboard/   index.html  app.js  style.css  vendor/d3.min.js  data/{sample.js, meta.js}
+server/      app.py (HTTP server, cache, cancellation)  engine.py (exact one-pass kernels)  test_engine.py
 data/        full/ (generated, git-ignored)
 ```
 
@@ -171,5 +229,8 @@ data/        full/ (generated, git-ignored)
   wealth and education) come out roughly independent.
 * State figures are approximations of public sources, projected to ~2026 and scaled to 1.5B. Treat them as
   realistic-looking, not authoritative.
+* Live mode serves one scan at a time (each scan uses every core). Concurrent users queue, which caching and
+  the instant sample estimates soften; scale out with replicas or by splitting states across machines, since
+  every result is a sum of counts.
 * The projection treats a selection as a closed population (no migration) and applies the selection's own
   fertility, even to groups such as "graduates".
