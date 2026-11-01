@@ -1,0 +1,6 @@
+# generated population (12 GB) and calibration cache; the small manifest and exact aggregates are kept
+/data/full/*
+!/data/full/manifest.json
+!/data/full/aggregates.npz
+/data/calibration_*.npz
+__pycache__/

@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bharat 1.5B: India population explorer (simulated)</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="viz-root" id="app">
+  <header class="top">
+    <div class="brand">
+      <div class="title">Bharat <span class="b15">1.5B</span> <span class="title-sub">population explorer</span></div>
+      <div class="subtitle" id="subtitle">Loading simulated population…</div>
+    </div>
+    <div class="top-controls">
+      <div class="seg" role="group" aria-label="Number format">
+        <button data-fmt="intl" class="on">1.5B</button><button data-fmt="indian">150 crore</button>
+      </div>
+      <button class="icon-btn" id="theme-toggle" aria-label="Toggle dark mode" title="Toggle dark mode">◐</button>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="explore" class="on">Explore</button>
+    <button role="tab" data-tab="compare">Compare</button>
+    <button role="tab" data-tab="projection">Projection 2026→2061</button>
+    <button role="tab" data-tab="hundred">India in 100 people</button>
+    <button role="tab" data-tab="me">People like me</button>
+    <button role="tab" data-tab="data">Data &amp; export</button>
+  </nav>
+
+  <section class="filter-row" id="filter-row" aria-label="Active filters">
+    <span class="filter-label">Selection</span>
+    <div id="chips" class="chips"></div>
+    <div class="quick">
+      <select id="quick-add" aria-label="Add a filter"><option value="">+ Add filter…</option></select>
+      <button class="ghost" id="clear-all">Reset</button>
+    </div>
+  </section>
+
+  <!-- ============================== EXPLORE -->
+  <main class="tab-panel on" id="tab-explore">
+    <div class="kpis" id="kpis"></div>
+    <div class="grid-main">
+      <div class="card map-card">
+        <div class="card-head">
+          <div><h2>States &amp; union territories</h2><p class="hint">Click tiles to select one or more states</p></div>
+          <select id="map-metric" aria-label="Map metric"></select>
+        </div>
+        <div id="map"></div>
+        <div id="map-legend" class="legend-scale"></div>
+      </div>
+      <div class="card pyr-card">
+        <div class="card-head">
+          <div><h2>Population pyramid</h2><p class="hint">Click a band to filter by age · outline = all India</p></div>
+          <div class="seg small" role="group" aria-label="Age resolution">
+            <button data-pyr="band" class="on">5-yr</button><button data-pyr="single">1-yr</button>
+          </div>
+        </div>
+        <div id="pyramid"></div>
+        <div class="legend" id="pyr-legend"></div>
+      </div>
+      <aside class="card insights-card">
+        <div class="card-head"><div><h2>What stands out</h2><p class="hint">Auto-generated for the current selection</p></div></div>
+        <ol id="insights" class="insights"></ol>
+      </aside>
+    </div>
+    <div class="grid-dims" id="dims"></div>
+  </main>
+
+  <!-- ============================== COMPARE -->
+  <main class="tab-panel" id="tab-compare">
+    <div class="card">
+      <div class="card-head"><div><h2>Compare two groups</h2><p class="hint">Pick a preset or build each group</p></div></div>
+      <div class="presets" id="presets"></div>
+      <div class="group-builders">
+        <div class="gb" id="gb-a"></div>
+        <div class="gb" id="gb-b"></div>
+      </div>
+    </div>
+    <div class="grid-compare">
+      <div class="card"><div class="card-head"><div><h2>Age structure</h2><p class="hint">% of each group by 5-year age band</p></div></div><div id="cmp-pyr"></div><div class="legend" id="cmp-pyr-legend"></div></div>
+      <div class="card"><div class="card-head"><div><h2>Key indicators</h2><p class="hint">Dot = group value · bar shows the gap</p></div></div><div id="cmp-table"></div></div>
+    </div>
+    <div class="grid-dims" id="cmp-dims"></div>
+  </main>
+
+  <!-- ============================== PROJECTION -->
+  <main class="tab-panel" id="tab-projection">
+    <div class="card">
+      <div class="card-head">
+        <div><h2>Where is the selection heading?</h2>
+          <p class="hint">Cohort-component projection of the selection, treated as a closed population (no migration), with state fertility and life tables</p></div>
+        <div class="proj-controls">
+          <div class="seg" role="group" aria-label="Fertility scenario">
+            <button data-scn="low">Low fertility</button><button data-scn="mid" class="on">Medium</button><button data-scn="high">High</button>
+          </div>
+        </div>
+      </div>
+      <div class="proj-top">
+        <div class="proj-year">
+          <div class="hero-year" id="proj-year">2026</div>
+          <div class="hero-pop" id="proj-pop"></div>
+          <div class="player">
+            <button class="icon-btn" id="proj-play" aria-label="Play">▶</button>
+            <input type="range" id="proj-slider" min="2026" max="2061" value="2026" aria-label="Projection year">
+          </div>
+          <div class="proj-stats" id="proj-stats"></div>
+        </div>
+        <div id="proj-pyramid"></div>
+      </div>
+    </div>
+    <div class="grid-proj" id="proj-lines"></div>
+  </main>
+
+  <!-- ============================== INDIA IN 100 -->
+  <main class="tab-panel" id="tab-hundred">
+    <div class="card hundred-card">
+      <div class="card-head">
+        <div><h2 id="h100-title">If the selection were 100 people</h2><p class="hint">Each figure is 1% of the selection</p></div>
+        <select id="h100-attr" aria-label="Colour figures by"></select>
+      </div>
+      <div class="hundred-wrap">
+        <div id="h100"></div>
+        <div class="h100-side"><div class="legend vertical" id="h100-legend"></div><div id="h100-facts" class="facts"></div></div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ============================== PEOPLE LIKE ME -->
+  <main class="tab-panel" id="tab-me">
+    <div class="grid-me">
+      <div class="card me-form">
+        <div class="card-head"><div><h2>Tell us about you</h2><p class="hint">Nothing leaves your browser</p></div></div>
+        <form id="me-form"></form>
+      </div>
+      <div class="card me-out">
+        <div class="card-head"><div><h2>Where you fit among 1.5 billion</h2></div></div>
+        <div id="me-results"></div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ============================== DATA -->
+  <main class="tab-panel" id="tab-data">
+    <div class="card">
+      <div class="card-head">
+        <div><h2>Selection by state: table view</h2><p class="hint">Every state with all non-state filters applied (as on the map); the first row is the exact selection. Click a header to sort.</p></div>
+        <div class="btns">
+          <button id="dl-states">Download table (CSV)</button>
+          <button id="dl-rows">Download sample rows (CSV)</button>
+        </div>
+      </div>
+      <div class="table-wrap"><table id="state-table"></table></div>
+    </div>
+    <div class="grid-two">
+      <div class="card"><div class="card-head"><div><h2>Exact vs dashboard estimate</h2><p class="hint">Exact counts from all 1.5B generated records vs the weighted extract this page runs on</p></div></div><div id="provenance"></div></div>
+      <div class="card"><div class="card-head"><div><h2>About this data</h2></div></div><div id="about" class="about"></div></div>
+    </div>
+  </main>
+
+  <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
+  <div id="loading" class="loading"><div class="spinner"></div><div id="loading-text">Decoding people…</div></div>
+</div>
+<script src="vendor/d3.min.js"></script>
+<script src="data/meta.js"></script>
+<script src="data/sample.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
