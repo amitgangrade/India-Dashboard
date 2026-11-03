@@ -18,6 +18,7 @@ import base64
 import json
 import os
 import queue
+import shutil
 import threading
 import time
 
@@ -87,9 +88,9 @@ def main():
 
     if not args.no_write:
         os.makedirs(args.out, exist_ok=True)
-        free = os.statvfs(args.out)
+        free = shutil.disk_usage(args.out).free     # works on Windows, macOS and Linux
         need = seg.sum() * 8
-        if free.f_bavail * free.f_frsize < need * 1.02:
+        if free < need * 1.02:
             raise SystemExit(f"Not enough disk: need {need / 1e9:.1f} GB in {args.out}")
 
     q = queue.Queue(maxsize=2)
@@ -157,7 +158,7 @@ def main():
                      total_s=round(time.time() - t_start, 1)),
         calibrated=dict(SP=T["SP"].tolist(), GP=T["GP"].tolist()),
     )
-    with open(os.path.join(out_dir, "manifest.json"), "w") as f:
+    with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=1)
 
     export_dashboard(T, seg, cube, cats, sample, manifest)
@@ -189,7 +190,7 @@ def export_dashboard(T, seg, cube, cats, sample, manifest):
     data_dir = os.path.join(ROOT, "dashboard", "data")
     os.makedirs(data_dir, exist_ok=True)
     # base64 inside a <script> so the page also works from file:// and on static hosts that refuse .bin
-    with open(os.path.join(data_dir, "sample.js"), "w") as f:
+    with open(os.path.join(data_dir, "sample.js"), "w", encoding="utf-8") as f:
         f.write('window.SAMPLE_B64="')
         f.write(base64.b64encode(sample.astype("<u8").tobytes()).decode("ascii"))
         f.write('";\n')
@@ -217,7 +218,7 @@ def export_dashboard(T, seg, cube, cats, sample, manifest):
         timings=manifest["timings"], files=len(manifest["files"]), written=manifest["written"],
         bytes_on_disk=int(seg.sum()) * 8,
     )
-    with open(os.path.join(data_dir, "meta.js"), "w") as f:
+    with open(os.path.join(data_dir, "meta.js"), "w", encoding="utf-8") as f:
         f.write("window.META = ")
         json.dump(meta, f, separators=(",", ":"))
         f.write(";\n")

@@ -24,7 +24,7 @@ The **full 12 GB population is not stored on GitHub**: single files go up to ~2 
 command below recreates the identical files. Check them with:
 
 ```bash
-cd data/full && sha256sum -c ../SHA256SUMS
+python generator/verify_checksums.py
 ```
 
 ## Quick start

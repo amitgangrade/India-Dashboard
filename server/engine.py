@@ -379,7 +379,7 @@ class Job:
 class Engine:
     def __init__(self, data_dir, piece_rows=48 * 2**20):
         self.data_dir = data_dir
-        with open(os.path.join(data_dir, "manifest.json")) as f:
+        with open(os.path.join(data_dir, "manifest.json"), encoding="utf-8") as f:
             self.manifest = json.load(f)
         self.parts = []   # (state, urban, memmap slice)
         for fi in self.manifest["files"]:

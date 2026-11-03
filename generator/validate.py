@@ -14,7 +14,7 @@ ROOT = os.path.dirname(HERE)
 
 def main(data_dir=os.path.join(ROOT, "data", "full"), out=os.path.join(ROOT, "VALIDATION.md")):
     z = np.load(os.path.join(data_dir, "aggregates.npz"))
-    man = json.load(open(os.path.join(data_dir, "manifest.json")))
+    man = json.load(open(os.path.join(data_dir, "manifest.json"), encoding="utf-8"))
     cube = z["cube"].astype(np.float64)  # state, urban, sexage, metric
     cats = z["cats"].astype(np.float64)  # state, urban, cat
     S = P.N_STATES
@@ -95,7 +95,7 @@ def main(data_dir=os.path.join(ROOT, "data", "full"), out=os.path.join(ROOT, "VA
         grad = agg(s, amin=25, metric=M.M_GRAD) / agg(s, amin=25)
         lines.append(f"| {st['name']} | {pop:,.0f} | {urb:.1%} | {sr:.0f} | {median_age(s)} | {litf:.1%} ({T['lit'][s, 1]:.1f}%) | "
                      f"{flf:.1%} ({st['flfp']}%) | {grad:.1%} ({st['grad']}%) |")
-    with open(out, "w") as f:
+    with open(out, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     print("\n".join(lines[:len(rows) + 9]))
     print(f"\nWrote {out}")

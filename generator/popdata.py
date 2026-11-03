@@ -18,7 +18,7 @@ LABELLED = {"sex", "religion", "caste", "language", "education", "marital", "act
 
 
 def manifest(data_dir=DEFAULT_DIR):
-    with open(os.path.join(data_dir, "manifest.json")) as f:
+    with open(os.path.join(data_dir, "manifest.json"), encoding="utf-8") as f:
         return json.load(f)
 
 
